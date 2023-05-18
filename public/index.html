@@ -36,15 +36,21 @@
         body, #message { margin-top: 0; background: white; box-shadow: none; }
         body { border-top: 16px solid #ffa100; }
       }
+      #canvas {
+        border: solid 2px black;
+      }
     </style>
   </head>
   <body>
-    <div id="message">
-      <h2>Welcome</h2>
-      <h1>Firebase Hosting Setup Complete</h1>
-      <p>You're seeing this because you've successfully setup Firebase Hosting. Now it's time to go build something extraordinary!</p>
-      <a target="_blank" href="https://firebase.google.com/docs/hosting/">Open Hosting Documentation</a>
-    </div>
+      <svg id="canvas" width="800" height="400">
+        <rect id="player" width="10" height="80" x="50" y="275" fill="#000000"/>
+        <rect id="ai" width="10" height="80" x="550" y="275" fill="#000000"/>
+        <line id="mid" x1="300" y1="0" x2="300" y2="600" stroke="#000000" 
+            stroke-dasharray="20"/>
+        <circle id="ball" r="10" cx="300" cy="300" fill="#000000"/>
+        <text id="score1" x="150" y="80" class="points">0</text>
+        <text id="score2" x="400" y="80" class="points">0</text>
+    </svg>
     <p id="load">Firebase SDK Loading&hellip;</p>
 
     <script>
@@ -84,6 +90,282 @@
           loadEl.textContent = 'Error loading the Firebase SDK, check the console.';
         }
       });
+      const TICK_TIME = 32;
+const BALL_RADIUS = 10;
+const DECK_HEIGHT = 80;
+const DECK_WIDTH = 10;
+const VIEW_HEIGHT = 400;
+const VIEW_WIDTH = 800;
+const RACKET_SPEED = 1;
+
+const render = (s) => {
+  const p = s.player.racket,
+    a = s.opponent.racket,
+    b = s.ball,
+    pSVG = document.getElementById("player"),
+    aSVG = document.getElementById("ai"),
+    ballSVG = document.getElementById("ball");
+
+  pSVG.setAttribute("y", String(p.y));
+  pSVG.setAttribute("x", String(p.x));
+  aSVG.setAttribute("y", String(a.y));
+  aSVG.setAttribute("x", String(a.x));
+  ballSVG.setAttribute("cy", String(b.current.y));
+  ballSVG.setAttribute("cx", String(b.current.x));
+};
+
+class Racket {
+  constructor(width, height, x, y, position, speed) {
+    this.width = width;
+    this.height = height;
+    this.x = x;
+    this.y = y;
+    this.position = position;
+    this.speed = speed;
+  }
+
+  hasBallIntersection(ball) {
+    const hasYIntersection =
+      ball.current.y + ball.radius/2 >= this.y &&
+      ball.current.y - ball.radius/2 <= this.y + this.height;
+    if (this.position === "left") {
+      return (
+        hasYIntersection &&
+        ball.current.x - ball.radius <= this.x + this.width / 2 && ball.xSpeed < 0
+      );
+    }
+
+    return (
+      hasYIntersection &&
+      ball.current.x + ball.radius >= this.x - this.width / 2 && ball.xSpeed > 0
+    );
+  }
+}
+
+class Ball {
+  BALL_START_SPEED = 1;
+  BALL_MAX_SPEED = 3;
+  BALL_SLOWDOWN_COEF = 0.9;
+
+  constructor(x, y) {
+    this.current = {
+      x,
+      y,
+    };
+    this.prev = null;
+    this.radius = BALL_RADIUS;
+  }
+
+  get xSpeed() {
+    return this.prev
+      ? this.current.x - this.prev.x
+      : this.BALL_START_SPEED;
+  }
+
+  get ySpeed() {
+    return this.prev
+      ? this.current.y - this.prev.y
+      : this.BALL_START_SPEED;
+  }
+
+  get ballSpeed() {
+    const distance = Math.sqrt(
+      Math.pow(this.xSpeed, 2) + Math.pow(this.ySpeed, 2)
+    );
+    return distance / TICK_TIME;
+  }
+
+  calculateSlowedBallSpeed(speed) {
+    const sign = speed > 0 ? 1 : -1
+    return Math.abs(speed * this.BALL_SLOWDOWN_COEF) < Math.abs(this.BALL_START_SPEED) ? this.BALL_START_SPEED * sign : speed * this.BALL_SLOWDOWN_COEF;
+  }
+
+  hasWallIntersect(viewHeight) {
+    const yPos = this.current.y;
+    return yPos + this.radius >= viewHeight || yPos - this.radius <= 0;
+  }
+}
+
+class GameEngine {
+  gameState = "waiting";
+
+  constructor(gameConfig, updateFn) {
+    const viewConfig = gameConfig.view;
+    if (viewConfig) {
+      this.viewWidth = viewConfig.view_width ?? VIEW_WIDTH;
+      this.viewHeight = viewConfig.view_height ?? VIEW_HEIGHT;
+    }
+
+    this.gameState = viewConfig.game_state;
+    this.updateFn = updateFn;
+    this.ball = new Ball(this.viewWidth / 2, this.viewHeight / 2);
+
+    this.player = {
+      score: 0,
+      racket: new Racket(
+        DECK_WIDTH,
+        DECK_HEIGHT,
+        DECK_WIDTH / 2,
+        this.viewHeight / 2,
+        "left",
+        RACKET_SPEED
+      ),
+    };
+
+    this.opponent = {
+      score: 0,
+      racket: new Racket(
+        DECK_WIDTH,
+        DECK_HEIGHT,
+        this.viewWidth - DECK_WIDTH *1.5,
+        this.viewHeight / 2,
+        "right",
+        RACKET_SPEED
+      ),
+    };
+
+    this.activeMoveKey = null;
+
+  }
+
+  updateActiveMoveKey({ type, code }) {
+    console.log(type, code)
+    if (type === "keyup") {
+      this.activeMoveKey = null;
+      return;
+    }
+
+    if (code === "ArrowUp") {
+      this.activeMoveKey = "up";
+      return;
+    }
+
+    if (code === "ArrowDown") {
+      this.activeMoveKey = "down";
+    }
+  }
+
+  startDetectActiveMoveKey() {
+    document.addEventListener("keydown", (e) => {this.updateActiveMoveKey(e)});
+    document.addEventListener("keyup", (e) => {this.updateActiveMoveKey(e)});
+
+    return () => {
+      document.removeEventListener("keydown", this.updateActiveMoveKey);
+      document.removeEventListener("keyup", this.updateActiveMoveKey);
+    };
+  }
+
+  updateRacketPosition() {
+    if (this.activeMoveKey === "down") {
+      const newY = this.player.racket.y + this.player.racket.speed;
+      if (newY + this.player.racket.height >= this.viewHeight) {
+        this.player.racket.y = this.viewHeight - this.player.racket.height;
+      } else {
+        this.player.racket.y = newY;
+      }
+      return;
+    }
+
+    if (this.activeMoveKey === "up") {
+      const newY = this.player.racket.y - this.player.racket.speed;
+      if (newY  <= 0) {
+        this.player.racket.y = 0;
+      } else {
+        this.player.racket.y = newY;
+      }
+      return;
+    }
+  }
+
+  updateBallPosition() {
+    let newPosX;
+    let newPosY;
+
+    if (this.ball.hasWallIntersect(this.viewHeight)) {
+      newPosX =
+        this.ball.current.x + this.ball.calculateSlowedBallSpeed(this.ball.xSpeed);
+      newPosY =
+        this.ball.current.y - this.ball.calculateSlowedBallSpeed(this.ball.ySpeed);
+    }
+    else if (
+      this.player.racket.hasBallIntersection(this.ball) ||
+      this.opponent.racket.hasBallIntersection(this.ball)
+    ) {
+      newPosX = this.ball.current.x - this.ball.xSpeed;
+      newPosY = this.ball.current.y + this.ball.ySpeed;
+    } else {
+      newPosX = this.ball.current.x + this.ball.xSpeed;
+      newPosY = this.ball.current.y + this.ball.ySpeed;
+    }
+
+
+    this.ball.prev = this.ball.current;
+    this.ball.current = {
+      x: newPosX,
+      y: newPosY,
+    };
+  }
+
+  resetAfterScore() {
+    this.ball.current = { x: this.viewWidth / 2, y: this.viewHeight / 2 };
+    this.ball.prev = null;
+  }
+
+  checkScoreUpdate() {
+    const isFirstPlayerScored =
+      this.ball.current.x + this.ball.radius >= this.viewWidth;
+    const isSecondPlayerScored = this.ball.current.x - this.ball.radius <= 0;
+
+
+    if (isFirstPlayerScored) {
+      this.player.score += 1;
+      this.resetAfterScore();
+      return;
+    }
+
+    if (isSecondPlayerScored) {
+      this.opponent.score += 1;
+      this.resetAfterScore();
+      return;
+    }
+  }
+
+  run() {
+    const stopDetectActiveMoveKey = this.startDetectActiveMoveKey();
+
+    console.log("pip");
+    const intervalId = setInterval(() => {
+      // if (this.player.score >= 7 || this.opponent.score >= 7) {
+      //   this.gameState = "end";
+      //   stopDetectActiveMoveKey();
+      //   clearInterval(intervalId);
+      //   console.log("===VSYO===");
+      //   return;
+      // }
+
+      this.checkScoreUpdate();
+      this.updateBallPosition();
+      console.log(this.activeMoveKey)
+      this.updateRacketPosition();
+      render({
+        player: this.player,
+        opponent: this.opponent,
+        ball: this.ball,
+      });
+    }, this.TICK_TIME);
+  }
+
+  updateOpponentPosition(prev, current) {
+    this.playerY = current;
+  }
+}
+
+if (typeof window != "undefined")
+  window.onload = () => {
+    new GameEngine({view: {game_state: 'processing', render}}).run();
+  };
+
+
     </script>
   </body>
 </html>
