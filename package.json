@@ -1,0 +1,8 @@
+{
+    "name": "@xpenb/infrapong",
+    "workspaces": [
+        "functions",
+        "public"
+    ],
+    "scripts": {}
+}
